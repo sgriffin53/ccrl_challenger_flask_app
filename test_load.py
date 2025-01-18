@@ -7,7 +7,7 @@ url = "http://localhost:8080/stream_engine"
 params = {
     "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
     "engine_name": "stockfish",
-    "time_limit": 20
+    "time_limit": 60
 }
 
 # Disable SSL verification for local testing (WARNING: Use with caution in production)
@@ -34,7 +34,7 @@ def test_api_concurrently(num_requests):
 
 if __name__ == "__main__":
     # Number of simultaneous requests to test
-    num_requests = 55
+    num_requests = 100
 
     print(f"Testing API with {num_requests} simultaneous requests...")
     results, elapsed_time = test_api_concurrently(num_requests)
