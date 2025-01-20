@@ -86,8 +86,9 @@ def get_github_links(engines):
                         if suffix == 'KB': bytes *= 1024
                      #   print(size, suffix, bytes)
                         tot_bytes += bytes
+                    filenames = is_windows[0]
                     #time.sleep(60)
-                    to_add = (engine_name, link, author, rating)
+                    to_add = (engine_name, link, author, rating, filenames)
                     if to_add not in all_links:
                         all_links.append(to_add)
                     print(all_links)
@@ -100,6 +101,7 @@ def get_github_links(engines):
         if do_break: break
     for engine in all_links:
         print(engine[0], "-", engine[3])
+    return all_links
 
 def check_for_license(orig_link):
     suffixes = ['/blob/master/LICENSE.md', '/blob/master/LICENSE', '/blob/master/LICENSE.txt']
@@ -187,13 +189,15 @@ def check_for_windows(link):
             if not backup_link:
                 backup_link = line.split("lazy\" src=\"")[1].split("\"")[0]
         if "a href=" in line and "/releases/download" in line:
+            download_link = "/releases/download" + line.split("/releases/download")[1].split("\"")[0].split("<")[0]
+            print(download_link)
             #print(line)
             filename = line.split("\"")[1]
             print(filename)
             filename = filename.split("/")[-1]
-            if ".7z" in filename.lower() or ".tar" in filename or ".tar.gz" in filename.lower() or ".zip" in filename.lower() or ".exe" in filename:
+            if ".zip" in filename.lower() or ".exe" in filename:
                 print(filename)
-                filenames.append(filename)
+                filenames.append((filename, download_link))
                 last_added = True
         if last_added and '<span style="white-space: nowrap;" data-view-component="true" class="color-fg-muted text-sm-left flex-auto ml-md-3">' in line:
             size = line.split(">")[1].split("<")[0]
@@ -211,14 +215,15 @@ def check_for_windows(link):
     last_added = False
     for line in lines:
         if "a href=" in line and "/releases/download" in line:
+            download_link = "/releases/download" + line.split("/releases/download")[1].split("\"")[0].split("<")[0]
+            print(download_link)
             #print(line)
             filename = line.split("\"")[1]
-            print(filename)
             filename = filename.split("/")[-1]
-            if (".tar" in filename or ".tar.gz" in filename.lower() or ".zip" in filename.lower() or ".exe" in filename or ".7z" in filename) and "mac" not in filename.lower() and "linux" not in filename.lower():
+            if ".zip" in filename.lower() or ".exe" in filename:
                 print(filename)
                 last_added = True
-                filenames.append(filename)
+                filenames.append((filename, download_link))
         if last_added and '<span style="white-space: nowrap;" data-view-component="true" class="color-fg-muted text-sm-left flex-auto ml-md-3">' in line:
             size = line.split(">")[1].split("<")[0]
             suffix = size.split(" ")[1]
@@ -263,7 +268,15 @@ def check_for_linux(link):
                 return True
     return False
 
+start_time = time.time()
+
 engines = get_engines()
-github_links = get_github_links(engines)
+engine_info = github_links = get_github_links(engines)
+f = open('engine_info_1.txt', 'w', encoding='utf-8')
+for info in engine_info:
+    f.write(str(info) + "\n")
+f.close()
+duration = round(time.time() - start_time, 2)
+print("Time taken: ", duration)
 #check_for_license('https://github.com/carlospolop/PurplePanda/')
 #check_file_sizes('https://github.com/PGG106/Alexandria/')

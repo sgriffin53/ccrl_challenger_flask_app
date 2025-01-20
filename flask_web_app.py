@@ -1,7 +1,12 @@
+import ast
+
 from flask import Flask, Response, request, redirect
 import subprocess
 import os
 import time
+import urllib
+import json
+import requests
 import random
 from flask_cors import CORS
 app = Flask(__name__)
@@ -13,29 +18,109 @@ def redirect_to_external_img(filename):
     return redirect(f'https://www.jimmyrustles.com/img/{filename}', code=302)
 
 
-@app.route("/ccrlchallenge", methods=["GET"])
+@app.route("/ccrlchallenger", methods=["GET"])
 def main_page():
     fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+    #fen = '1k6/8/8/8/8/4N2r/PPP5/1K6 b - - 0 1'
+    #fen = 'rnbqkb1r/ppp3Pp/5n2/3pp3/8/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1'
     colour = request.args.get('colour')
     move_time = request.args.get('move_time')
+    book_moves = request.args.get("book_moves")
+    engine_name = request.args.get("engine")
     if colour == 'random':
         colour = random.choice(['white', 'black'])
-    to_move = colour
+    to_move = fen.split(" ")[1].replace("b","black").replace("w","white")
    # fen = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1'
    # to_move = 'White'
     if request.args.get('newgame') is None and request.args.get('game_settings') is None:
-        outtext = '<html><body>'
+        outtext = '<html>'
+        outtext += '''<head><style>
+                    /* General table styling */
+
+                    table {
+                      width: 600px; /* Fixed width for the table */
+                      margin: 20px auto; /* Centers the table horizontally */
+                      border-collapse: collapse;
+                      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                    }
+                    
+                    /* Header styling */
+                    th {
+                      background-color: #4CAF50;
+                      color: white;
+                      padding: 12px 15px;
+                      text-align: left;
+                      font-weight: bold;
+                      border-bottom: 2px solid #ddd;
+                    }
+                    
+                    /* Cell styling */
+                    td {
+                      padding: 12px 15px;
+                      border-bottom: 1px solid #ddd;
+                      text-align: left;
+                    }
+                    
+                    /* Zebra striping for rows */
+                    tr:nth-child(even) {
+                      background-color: #f9f9f9;
+                    }
+                    
+                    /* Hover effect for rows */
+                    tr:hover {
+                      background-color: #f1f1f1;
+                    }
+                    
+                    /* Borders and padding for a clean look */
+                    td, th {
+                      border: 1px solid #ddd;
+                    }
+                    
+                    /* Add rounded corners to the table */
+                    table {
+                      border-radius: 8px;
+                      overflow: hidden;
+                    }
+            </style></head>
+        '''
+        outtext += '<body>'
         outtext += '''<center>
-                    <h2>CCRL Challenger</h2>
-                    Select opponent
-                    <br><br>
-                    <a href="/ccrlchallenge?game_settings=True&engine=Default">Default (1500)</a>
-                    </body></html>
+                    <h1>CCRL Challenger</h1>
+                    This site allows you to play against 121 different chess engines in your browser.<br>
+                    All engines are open-source engines taken from the CCRL (Computer Chess Rating List)<br><br>
+                    Limitations:<br>
+                    <li> Engines have been tested but reliability cannot be guaranteed.
+                    <li> A maximum of 5 seconds computer move time is allowed
+                    <li> Engines are set to use a 32MB hash table
+                    <h2>Select opponent</h2>
                     '''
+        page = requests.get("https://tapir-bold-personally.ngrok-free.app/engine_list")
+        data = page.text
+        lines = data.split("\n")
+        outtext += "<table border=0><tr><td>Rank</td><td>Name</td><td>Rating</td></tr>"
+        for line in lines:
+            #outtext += "<tr><td>" + str(split_data) + "</td></tr>"
+            line = ast.literal_eval(f"[{line}]")
+            if len(line) == 0: continue
+            #print(type(line))
+            #print(len(line))
+            rank = line[3].split(" ")[0]
+            rating = line[3].split(" ")[1].replace("(","").replace(")","")
+            outtext += "<tr><td>" + rank + "</td><td><a href=\"/ccrlchallenger?game_settings=True&engine=" + line[0] + "\">" + line[0] + "</a></td><td>" + rating + "</td></tr>"
+        outtext += "</table>"
+        outtext += '</body></html>'
         return outtext
     elif request.args.get('game_settings') is not None:
-        outtext = '<html><body>'
-        outtext += f'''<center>
+        outtext = '<html>'
+        outtext += '''<head><style>
+                        /* Optional: Style for greyed-out input */
+                        input:disabled {
+                            background-color: #e9e9e9;
+                            color: #7d7d7d;
+                            cursor: not-allowed;
+                        }
+                    </style>'''
+        outtext += f'''<body><center>
                     <h1>CCRL Challenger</h1>                    
                     <h2>New Game</h2>
                     <form method="get">
@@ -50,10 +135,31 @@ def main_page():
                     <input type="radio" name="colour" value="random" id="random" checked>
                     <label for="random">Random</label>
                     <br><br>
-                    Computer move time (seconds, 0.1 to 5): <input type="input" name="move_time" value="5" style="width:50px">
+                    Computer move time (seconds, 0.001 to 5): <input type="input" name="move_time" value="3" style="width:50px">
                     <br><br>
-                    <input type="submit" action="startgame" value="Start Game"></form>
+                    <input type="checkbox" name="use_book" id="use_book" checked onClick=bookCheckClick()><label for="use_book">Use opening book</label>
+                    <br>
+                    Max book moves: <input type="input" name="book_moves" id="book_moves" style="width:50px" value="5">
                     <br><br>
+                    <input type="submit" action="startgame" value="Start Game" onClick=onSubmit()></form>
+                    <br><br>
+                    '''
+        outtext += '''
+                    <script>
+                    function bookCheckClick() {
+                        if (document.getElementById('use_book').checked) {
+                            document.getElementById('book_moves').disabled = false
+                        }
+                        else {
+                            document.getElementById('book_moves').disabled = true
+                        }
+                    }
+                    function onSubmit() {
+                        if (!document.getElementById('use_book').checked) {
+                            document.getElementById('book_moves') = 0
+                        }
+                    }
+                    </script>
                     '''
         return outtext
     else:
@@ -112,16 +218,33 @@ def main_page():
                 <center>
                     <h1>CCRL Challenger</h1>
                     <br>
+                    '''
+        #print(data)
+        #engine_info = ast.literal_eval(f"[{data}]")
+        #author = data[2]
+        #outtext += "Author:" + author + "<br>"
+        outtext += f'''
                     <!-- Chessboard container -->
                     <div class="container">
                         <div class="board-div" id="myBoard" style="width: 500px;"></div>
                         <div class="info-text" id="info-text" style="width: 200px"></div>
                     </div>
                     <br>
-                </center>
+                
                 '''
+        page = requests.get("https://tapir-bold-personally.ngrok-free.app/engine_info?engine_name=" + engine_name)
+        data = page.text
+        data = ast.literal_eval(f'[{data}]')
+        if data != 'None':
+            outtext += 'Engine: ' + data[0] + '<br>'
+            outtext += 'Github: <a href="' + data[1] + '">' + data[1] + '</a><br>'
+            outtext += 'Author: ' + data[2] + '<br>'
+            outtext += 'Rank: ' + data[3] + '<br>'
+            outtext += 'Executable file: ' + data[4].split("/")[-1] + '<br><br>'
+        outtext += '<a href="/ccrlchallenger?game_settings=True&engine=' + engine_name + '">Play again against ' + engine_name + '</a><br><br>'
+        outtext += '<a href="/ccrlchallenger">Chose a new opponent</a><br><br>'
         outtext += '''
-    
+                </center>
                 <!-- Initialize Chessboard after ensuring scripts are loaded -->
                 <script>
                     var computer_turn = false
@@ -132,7 +255,7 @@ def main_page():
         outtext += f'''
                             draggable: true,        // Allow piece dragging
                             position: '{fen}',      // Start position for pieces
-                            orientation: '{to_move}',    // Show correct orientation
+                            orientation: '{colour}',    // Show correct orientation
                             onDrop: onDrop
     }};
     
@@ -141,12 +264,12 @@ def main_page():
                     
                     '''
         outtext += f'''
-                    const player_colour = "{to_move}";
-                    if (player_colour == 'black') {{
+                    const to_move = "{to_move}";
+                    const player_colour = "{colour}";
+                    if (player_colour != to_move) {{
                         computer_turn = true
-                        // engine is white and has the first move
+                        // engine has the first move
                         
-                        //board.draggable(false)
                         getEngineMove()
                     }}
                     else {{
@@ -161,15 +284,17 @@ def main_page():
                     var blackSquareGrey = '#696969'
                     var whiteSquareGreen = '#00d900'
                     var blackSquareGreen = '#009900'
-                    fen = "{fen}"; // Example FEN
-                    const engineName = "stockfish"; // Replace with your engine name
+                    var SquareRed = '#ff0000'
+                    fen = "{fen}";
+                    book_moves = "{book_moves}"
+                    const engineName = "{engine_name}"; // Replace with your engine name
                     const timeLimit = {move_time}; // 5 seconds
                     '''
         outtext += '''
                     function getEngineMove() {
                         computer_turn = true
                         document.getElementById('info-text').innerHTML = "Getting engine move."
-                        const eventSource = new EventSource(`https://tapir-bold-personally.ngrok-free.app/stream_engine?fen=${encodeURIComponent(fen)}&engine_name=${engineName}&move_time=${timeLimit}`);
+                        const eventSource = new EventSource(`https://tapir-bold-personally.ngrok-free.app/stream_engine?fen=${encodeURIComponent(fen)}&engine_name=${engineName}&move_time=${timeLimit}&book_moves=${book_moves}`);
                 
                         eventSource.onmessage = (event) => {
                             const data = JSON.parse(event.data);
@@ -186,8 +311,11 @@ def main_page():
                                 document.getElementById('info-text').innerHTML += "NPS: " + data.nps.toString().replace(/\B(?<!\.\d*)(?=(\d{3})+(?!\d))/g, ",") + "<br>";
                             }
                             if (data.score) {
-                                score = (data.score / 100).toString()
-                                if (data.score >= 0) score = "+" + score
+                                score = data.score
+                                if (!data.score.includes("Mate")) {
+                                    score = (data.score / 100).toString()
+                                    if (data.score >= 0) score = "+" + score
+                                }
                                 document.getElementById('info-text').innerHTML += "Score: " + score + "<br>";
                             }
                             if (data.current_best) {
@@ -202,13 +330,16 @@ def main_page():
                                 //document.getElementById('info-text').innerHTML += "Current clients: " + data.current_clients
                                 server_load = Math.round(data.current_clients * (100 / 100))
                                 if (server_load < 0) server_load = 0
-                                document.getElementById('info-text').innerHTML += "Server load: " + server_load + "%"
+                                //document.getElementById('info-text').innerHTML += "Server load: " + server_load + "%"
                                 
                             }
                             if (data.error) {
                                 document.getElementById('info-text').innerHTML = "Error: " + data.error
                                 buttonString = '<input type="button" onClick=getEngineMove() value="Try again">'
                                 document.getElementById('info-text').innerHTML += "<br><br>" + buttonString
+                            }
+                            if (data.book_move) {
+                                document.getElementById('info-text').innerHTML = "Received move from book."
                             }
                             if (data.best_move) {
                                 //console.log(`Final Best Move: ${data.best_move}`);
@@ -244,6 +375,9 @@ def main_page():
                                         if (data.game_over && data.game_over != 'False') {
                                             document.getElementById('info-text').innerHTML += "<br>" + data.game_over 
                                         }
+                                        if (data.king_pos) {
+                                            redSquare(data.king_pos)
+                                        }
                                     }
                                     resolve();
                                     eventSource.close();
@@ -265,12 +399,12 @@ def main_page():
                     async function handleMove(move) {
                         try {
                             await get_fen_and_legal_moves(move); // Wait for this to complete
-                            if (move != 'None') getEngineMove(); // Trigger the next function after the promise resolves
+                            infotext = document.getElementById('info-text').innerHTML
+                            if (move != 'None' && !infotext.includes('wins by') && !infotext.includes('draw')) getEngineMove(); // Trigger the next function after the promise resolves
                         } catch (error) {
                             console.error("Error handling move:", error);  // Catch and log any error that occurs in get_fen_and_legal_moves
                         }
                     }
-                    
                     function onDrop (source, target, piece, newPos, oldPos, orientation) {
                         if (computer_turn) {
                             return 'snapback';
@@ -306,6 +440,14 @@ def main_page():
                         var background = whiteSquareGreen;
                         if ($square.hasClass('black-3c85d')) {;
                             background = blackSquareGreen;
+                        };
+                        $square.css('background', background);
+                    }
+                    function redSquare (square) {
+                        var $square = $('#myBoard .square-' + square);
+                        var background = SquareRed;
+                        if ($square.hasClass('black-3c85d')) {;
+                            background = SquareRed;
                         };
                         $square.css('background', background);
                     }
