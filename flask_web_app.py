@@ -1,5 +1,5 @@
 import ast
-
+from datetime import datetime
 from flask import Flask, Response, request, redirect
 import subprocess
 import os
@@ -11,6 +11,9 @@ import random
 from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
+
+def get_footer():
+    return ''
 
 @app.route('/img/<path:filename>')
 def redirect_to_external_img(filename):
@@ -36,14 +39,13 @@ def main_page():
         outtext = '<html>'
         outtext += '''<head><style>
                     /* General table styling */
-
                     table {
                       width: 600px; /* Fixed width for the table */
                       margin: 20px auto; /* Centers the table horizontally */
                       border-collapse: collapse;
                       box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
                     }
-                    
+
                     /* Header styling */
                     th {
                       background-color: #4CAF50;
@@ -53,29 +55,29 @@ def main_page():
                       font-weight: bold;
                       border-bottom: 2px solid #ddd;
                     }
-                    
+
                     /* Cell styling */
                     td {
                       padding: 12px 15px;
                       border-bottom: 1px solid #ddd;
                       text-align: left;
                     }
-                    
+
                     /* Zebra striping for rows */
                     tr:nth-child(even) {
                       background-color: #f9f9f9;
                     }
-                    
+
                     /* Hover effect for rows */
                     tr:hover {
                       background-color: #f1f1f1;
                     }
-                    
+
                     /* Borders and padding for a clean look */
                     td, th {
                       border: 1px solid #ddd;
                     }
-                    
+
                     /* Add rounded corners to the table */
                     table {
                       border-radius: 8px;
@@ -86,18 +88,43 @@ def main_page():
         outtext += '<body>'
         outtext += '''<center>
                     <h1>CCRL Challenger</h1>
-                    This site allows you to play against 121 different chess engines in your browser.<br>
-                    All engines are open-source engines taken from the CCRL (Computer Chess Rating List)<br><br>
+                    This site allows you to play against 118 different chess engines in your browser.<br>
+                    All engines are open-source engines taken from the <a href="https://computerchess.org.uk/ccrl/404/">CCRL (Computer Chess Rating List)</a><br><br>
                     Limitations:<br>
                     <li> Engines have been tested but reliability cannot be guaranteed.
                     <li> A maximum of 5 seconds computer move time is allowed
                     <li> Engines are set to use a 32MB hash table
+                    <li> Pawns will auto-promote to queens
+                    <li> Threefold draws are not detected
+                    '''
+        outtext += '<br><br><a href="/ccrlchallenger">Sort by rating</a><br><br>'
+        outtext += '<a href="/ccrlchallenger?sort_by_date=True">Sort by release date</a>'
+        outtext += '''
                     <h2>Select opponent</h2>
                     '''
-        page = requests.get("https://tapir-bold-personally.ngrok-free.app/engine_list")
+        try:
+            page = requests.get("https://ccrl_tunnel.blindfoldchess.app/engine_list")
+        except:
+            return "<html><center>Unable to connect to server. Try again in a few minutes.</center>" + get_footer()
         data = page.text
+        if "8CPU" not in page.text:
+            return "<html><center>Unable to connect to server (invalid response). Tunnel is most likely temporarily unavailable. Try again in a few minutes.</center>" + get_footer()
+        #return data
         lines = data.split("\n")
-        outtext += "<table border=0><tr><td>Rank</td><td>Name</td><td>Rating</td></tr>"
+        # get random engine
+        engine_list = []
+        for line in lines:
+            line = ast.literal_eval(f"[{line}]")
+            if len(line) < 2: continue
+            engine_list.append(line[0])
+        random_engine = random.choice(engine_list)
+        outtext += f"<a href=\"/ccrlchallenger?game_settings=True&engine={random_engine}\">Play Against Random Engine</a><br>"
+
+        # Print sorted list
+        #for line in sorted_lines:
+         #   outtext += print(line) + "<BR>"
+        outtext += "<table border=0><tr><td>Rank</td><td>Name</td><td>Rating</td><td>Release Date</td></tr>"
+        all_engines = []
         for line in lines:
             #outtext += "<tr><td>" + str(split_data) + "</td></tr>"
             line = ast.literal_eval(f"[{line}]")
@@ -106,9 +133,19 @@ def main_page():
             #print(len(line))
             rank = line[3].split(" ")[0]
             rating = line[3].split(" ")[1].replace("(","").replace(")","")
-            outtext += "<tr><td>" + rank + "</td><td><a href=\"/ccrlchallenger?game_settings=True&engine=" + line[0] + "\">" + line[0] + "</a></td><td>" + rating + "</td></tr>"
+            release_date = line[4]
+            all_engines.append((line[0], line[3], release_date))
+            #outtext += "<tr><td>" + rank + "</td><td><a href=\"/ccrlchallenger?game_settings=True&engine=" + line[0] + "\">" + line[0] + "</a></td><td>" + rating + "</td><td>" + release_date + "</td></tr>"
+        if request.args.get("sort_by_date"):
+            all_engines = sorted(all_engines, key=lambda x: datetime.strptime(x[2], '%Y-%m-%d'), reverse=True)
+        for line in all_engines:
+            rank = line[1].split(" ")[0]
+            rating = line[1].split(" ")[1].replace("(", "").replace(")", "")
+            release_date = line[2]
+            outtext += "<tr><td>" + rank + "</td><td><a href=\"/ccrlchallenger?game_settings=True&engine=" + line[0] + "\">" + line[0] + "</a></td><td>" + rating + "</td><td>" + release_date + "</td></tr>"
+
         outtext += "</table>"
-        outtext += '</body></html>'
+        outtext += get_footer()
         return outtext
     elif request.args.get('game_settings') is not None:
         outtext = '<html>'
@@ -121,11 +158,19 @@ def main_page():
                         }
                     </style>'''
         outtext += f'''<body><center>
-                    <h1>CCRL Challenger</h1>                    
+                    <h1>CCRL Challenger</h1>
                     <h2>New Game</h2>
                     <form method="get">
                     <input type="hidden" name="newgame" value="True">
                     <input type="hidden" name="engine" value="{request.args.get('engine')}">
+                    '''
+        page = requests.get("https://ccrl_tunnel.blindfoldchess.app/engine_info?engine_name=" + engine_name)
+        data = page.text
+        data = ast.literal_eval(f'[{data}]')
+        if data != 'None':
+            if data[5] and data[5] != 'None':
+                outtext += f'<img src="{data[5]}"><br><br>'
+        outtext += f'''
                     Playing against: {request.args.get('engine')}
                     <br><br>
                     Play as: <input type="radio" name="colour" value="white" id="white">
@@ -142,8 +187,9 @@ def main_page():
                     Max book moves: <input type="input" name="book_moves" id="book_moves" style="width:50px" value="5">
                     <br><br>
                     <input type="submit" action="startgame" value="Start Game" onClick=onSubmit()></form>
-                    <br><br>
+                    <br>
                     '''
+        outtext += '<a href="/ccrlchallenger">Choose a new opponent</a><br><br>'
         outtext += '''
                     <script>
                     function bookCheckClick() {
@@ -161,27 +207,34 @@ def main_page():
                     }
                     </script>
                     '''
+        outtext += get_footer()
         return outtext
     else:
         outtext ='''<html><body>
                 <link rel="canonical" href="https://www.jimmyrustles.com/ccrlchallenger" />
                 <style>
                     /* General page styling */
+                    @media screen and (max-width:767px) {
+                       html, body {
+                          	overflow: hidden;
+                       }
+                    }
+
                     body {
                         font-family: Arial, sans-serif;
                         margin: 0;
                         padding: 0;
                     }
-    
+
                     /* Page content styling */
                     .content {
                         padding: 20px;
                     }
-    
+
                     .section {
                         margin: 20px 0;
                     }
-    
+
                     .section h2 {
                         margin-top: 0;
                     }
@@ -191,17 +244,14 @@ def main_page():
                         align-items: center; /* Align items vertically in the centre */
                         gap: 20px; /* Add space between the elements */
                     }
-                
-                    .board-div {
-                        /* Add styles specific to the board if needed */
-                    }
-                
+
                     .info-text {
                         align-self: flex-start;
                         font-size: 16px;
                         padding: 10px;
                         text-align: left;
-                    }
+                    };
+
                 </style>
                 <!-- Ensure CSS for the chessboard is linked -->
                 <link rel="stylesheet" href="https://www.jimmyrustles.com/css/chessboard-1.0.0.min.css">
@@ -230,19 +280,24 @@ def main_page():
                         <div class="info-text" id="info-text" style="width: 200px"></div>
                     </div>
                     <br>
-                
+
                 '''
-        page = requests.get("https://tapir-bold-personally.ngrok-free.app/engine_info?engine_name=" + engine_name)
+        page = requests.get("https://ccrl_tunnel.blindfoldchess.app/engine_info?engine_name=" + engine_name)
         data = page.text
         data = ast.literal_eval(f'[{data}]')
         if data != 'None':
+            if data[5] and data[5] != 'None':
+                outtext += f'<img src="{data[5]}"><br><br>'
             outtext += 'Engine: ' + data[0] + '<br>'
+            outtext += 'Rank: ' + data[3] + '<br>'
+            outtext += 'Release date: ' + data[7] + '<br>'
             outtext += 'Github: <a href="' + data[1] + '">' + data[1] + '</a><br>'
             outtext += 'Author: ' + data[2] + '<br>'
-            outtext += 'Rank: ' + data[3] + '<br>'
-            outtext += 'Executable file: ' + data[4].split("/")[-1] + '<br><br>'
+            outtext += 'Executable file: ' + data[4].split("/")[-1] + '<br>'
+            outtext += 'Language: ' + data[6] + '<br><br>'
+
         outtext += '<a href="/ccrlchallenger?game_settings=True&engine=' + engine_name + '">Play again against ' + engine_name + '</a><br><br>'
-        outtext += '<a href="/ccrlchallenger">Chose a new opponent</a><br><br>'
+        outtext += '<a href="/ccrlchallenger">Choose a new opponent</a><br><br>'
         outtext += '''
                 </center>
                 <!-- Initialize Chessboard after ensuring scripts are loaded -->
@@ -258,10 +313,10 @@ def main_page():
                             orientation: '{colour}',    // Show correct orientation
                             onDrop: onDrop
     }};
-    
+
                         board = Chessboard('myBoard', config); // Initialize the chessboard
-                    
-                    
+
+
                     '''
         outtext += f'''
                     const to_move = "{to_move}";
@@ -269,7 +324,7 @@ def main_page():
                     if (player_colour != to_move) {{
                         computer_turn = true
                         // engine has the first move
-                        
+
                         getEngineMove()
                     }}
                     else {{
@@ -294,8 +349,8 @@ def main_page():
                     function getEngineMove() {
                         computer_turn = true
                         document.getElementById('info-text').innerHTML = "Getting engine move."
-                        const eventSource = new EventSource(`https://tapir-bold-personally.ngrok-free.app/stream_engine?fen=${encodeURIComponent(fen)}&engine_name=${engineName}&move_time=${timeLimit}&book_moves=${book_moves}`);
-                
+                        const eventSource = new EventSource(`https://ccrl_tunnel.blindfoldchess.app/stream_engine?fen=${encodeURIComponent(fen)}&engine_name=${engineName}&move_time=${timeLimit}&book_moves=${book_moves}`);
+
                         eventSource.onmessage = (event) => {
                             const data = JSON.parse(event.data);
                             if (data && data.current_best && (!data.best_move || data.best_move === "")) {
@@ -331,7 +386,7 @@ def main_page():
                                 server_load = Math.round(data.current_clients * (100 / 100))
                                 if (server_load < 0) server_load = 0
                                 //document.getElementById('info-text').innerHTML += "Server load: " + server_load + "%"
-                                
+
                             }
                             if (data.error) {
                                 document.getElementById('info-text').innerHTML = "Error: " + data.error
@@ -358,13 +413,13 @@ def main_page():
                             console.error("Error receiving events", err);
                             eventSource.close();
                         };
-                    
+
                     }
                     function get_fen_and_legal_moves(move) {
                         return new Promise((resolve, reject) => {
-                            
-                            const eventSource = new EventSource(`https://tapir-bold-personally.ngrok-free.app/new_fen_and_legal_moves?fen=${encodeURIComponent(fen)}&move=${move}`);
-                    
+
+                            const eventSource = new EventSource(`https://ccrl_tunnel.blindfoldchess.app/new_fen_and_legal_moves?fen=${encodeURIComponent(fen)}&move=${move}`);
+
                             eventSource.onmessage = (event) => {
                                 try {
                                     const data = JSON.parse(event.data);
@@ -373,7 +428,7 @@ def main_page():
                                         fen = data.new_fen
                                         legal_moves = data.legal_moves;
                                         if (data.game_over && data.game_over != 'False') {
-                                            document.getElementById('info-text').innerHTML += "<br>" + data.game_over 
+                                            document.getElementById('info-text').innerHTML += "<br>" + data.game_over
                                         }
                                         if (data.king_pos) {
                                             redSquare(data.king_pos)
@@ -387,7 +442,7 @@ def main_page():
                                     eventSource.close();
                                 }
                             };
-                    
+
                             eventSource.onerror = (error) => {
                                 console.error("EventSource encountered an error:", error);
                                 eventSource.close();
@@ -395,7 +450,7 @@ def main_page():
                             };
                         });
                     }
-                    
+
                     async function handleMove(move) {
                         try {
                             await get_fen_and_legal_moves(move); // Wait for this to complete
@@ -425,14 +480,14 @@ def main_page():
                         //alert("test")
                         $('#myBoard .square-55d63').css('background', '')
                     }
-                    
+
                     function greySquare (square) {
                         var $square = $('#myBoard .square-' + square);
                         var background = whiteSquareGrey;
                         if ($square.hasClass('black-3c85d')) {;
                             background = blackSquareGrey;
                         };
-                
+
                         $square.css('background', background);
                     }
                     function greenSquare (square) {
@@ -452,8 +507,9 @@ def main_page():
                         $square.css('background', background);
                     }
                 </script>
-            </body>
-            </html>'''
+                '''
+        outtext += get_footer()
+
         return outtext
 
 if __name__ == "__main__":
