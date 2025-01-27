@@ -20,6 +20,184 @@ def redirect_to_external_img(filename):
     # Redirect to the external URL, preserving the filename
     return redirect(f'https://www.jimmyrustles.com/img/{filename}', code=302)
 
+@app.route('/ccrlchallenger/img/<path:filename>')
+def redirect_to_external_img_ccrl(filename):
+    # Redirect to the external URL, preserving the filename
+    return redirect(f'https://www.jimmyrustles.com/img/{filename}', code=302)
+
+@app.route("/ccrlchallenger/playing_now", methods=["GET"])
+def playing_now_page():
+    outtext = '<html><body><div id="maindiv"></div>'
+    outtext += '''
+   <!-- Ensure CSS for the chessboard is linked -->
+<link rel="stylesheet" href="https://www.jimmyrustles.com/css/chessboard-1.0.0.min.css">
+<!-- jQuery (required for Chessboard.js) -->
+<script src="https://code.jquery.com/jquery-3.5.1.min.js"
+    integrity="sha384-ZvpUoO/+PpLXR1lu4jmpXWu80pZlYUAfxl5NsBMWOEPSjUn/6Z/hRTt8+pR6L4N2"
+    crossorigin="anonymous"></script>
+<!-- Chessboard.js script -->
+<script src="https://www.jimmyrustles.com/js/chessboard-1.0.0.min.js"></script>
+
+<style>
+    /* Styling for the boards container */
+    .boards-container {
+        display: flex;
+        flex-wrap: wrap; /* Allow wrapping for smaller screens */
+        gap: 20px; /* Space between boards */
+    }
+
+    .board-wrapper {
+        text-align: center; /* Centre-align the match titles */
+    }
+
+    .match-title {
+        font-weight: bold;
+        margin-bottom: 10px;
+        font-size: 16px;
+    }
+</style>
+    <style>
+        /* Style for the container */
+        .board-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px; /* Add spacing between the boards */
+            padding: 20px;
+        }
+
+        /* Each game board wrapper */
+        .board-wrapper {
+            text-align: center;
+            width: 500px; /* Set consistent width for each wrapper */
+        }
+
+        .board-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .board-div {
+            margin: 0 auto; /* Centre the chessboard within the wrapper */
+            width: 600px;
+            height: 600px;
+        }
+    </style>
+<center>
+<h1>CCRL Challenger</h1>
+<h2>Games in Progress</h2>
+<script>
+    // Function to handle the event stream and create/update chess boards
+    function handleEventStream(eventSourceUrl) {
+        const eventSource = new EventSource(eventSourceUrl);
+        const container = document.getElementById('boardContainer');
+        var keep_going = true;
+        eventSource.onmessage = function (event) {
+            const data = JSON.parse(event.data); // Parse incoming data
+            console.log('Received event:', event.data);  // Log raw event data
+                data.forEach(item => {
+                    if (item.delete_user) {
+                        // Handle board deletion
+                        const boardWrapper = document.getElementById(item.delete_user);
+                        console.log(`Received request to delete user_id: ${item.delete_user}`);
+                        keep_going = false
+                        if (boardWrapper) {
+                            console.log('Board found:', boardWrapper); // Log if board is found
+                            boardWrapper.remove(); // Remove the board wrapper from the DOM
+                            console.log(`Board with user_id ${item.delete_user} deleted.`);
+                        } else {
+                            console.log(`No board found with user_id ${item.delete_user}`);
+                        }
+                    }
+                });
+            keep_going = true;
+            if (keep_going) {
+                // Handle board creation or updates
+                data.forEach(item => {
+                    const { fen, user_id, match_title, player_colour } = item;
+                    if (match_title != undefined) {
+                        // Check if a board with this user_id already exists
+                        let boardWrapper = document.getElementById(user_id);
+                
+                        if (boardWrapper) {
+                            // Update the existing board
+                            const board = Chessboard(boardWrapper.querySelector('.board-div'));
+                            board.position(fen); // Update the board with the new FEN
+                            board.orientation(player_colour);
+                            // Update the match title
+                            const title = boardWrapper.querySelector('.match-title');
+                            if (title) {
+                                title.innerText = match_title; // Update the title text
+                            }
+                        } else {
+                            // Create a new wrapper for the board if it doesn't exist
+                            boardWrapper = document.createElement('div');
+                            boardWrapper.id = user_id; // Assign the user_id as the id
+                            boardWrapper.className = 'board-wrapper';
+                
+                            // Create and add the match title
+                            const title = document.createElement('div');
+                            title.className = 'match-title';
+                            title.innerText = match_title;
+                
+                            // Create the chess board div
+                            const boardDiv = document.createElement('div');
+                            boardDiv.className = 'board-div';
+                            boardDiv.style.width = '500px';
+                
+                            // Append title and board to the wrapper
+                            boardWrapper.appendChild(title);
+                            boardWrapper.appendChild(boardDiv);
+                
+                            // Add the wrapper to the container
+                            document.querySelector('.boards-container').appendChild(boardWrapper);
+                
+                            // Initialise the chess board
+                            const config = {
+                                draggable: false,          // Allow piece dragging
+                                position: fen,            // Start position for pieces
+                                orientation: player_colour, // Use player_colour dynamically
+                                onDrop: onDrop            // Define the onDrop callback function if needed
+                            };
+                
+                            Chessboard(boardDiv, config); // Create the chessboard
+                        }
+                    }
+                });
+                
+                // Delete boards for user_ids not in the data
+                const currentBoards = document.querySelectorAll('.board-wrapper');
+                const receivedUserIds = data.map(item => item.user_id);
+                
+                currentBoards.forEach(board => {
+                    const boardUserId = board.id; // Get the user_id from the board's id
+                    if (!receivedUserIds.includes(boardUserId)) {
+                        board.remove(); // Remove the board if its user_id is not in the received data
+                    }
+                });
+            }
+        };
+    }
+
+    // Replace with your actual EventStream endpoint
+    const eventStreamUrl = 'http://ccrl_tunnel.blindfoldchess.app/playing_now_sse';
+    handleEventStream(eventStreamUrl);
+
+    // Optional: Define the onDrop function (you can customise this as needed)
+    function onDrop(source, target, piece, newPos, oldPos, orientation) {
+        console.log(`Piece ${piece} moved from ${source} to ${target}`);
+        // Add logic for when a piece is dropped, if required
+    }
+</script>
+
+<body>
+    <!-- Container to hold all the boards -->
+    <div class="boards-container"></div>
+    '''
+    outtext += '<a href="/ccrlchallenger">Back to Engine List</a>'
+    outtext += get_footer()
+    return outtext
 
 @app.route("/ccrlchallenger", methods=["GET"])
 def main_page():
@@ -85,6 +263,13 @@ def main_page():
                     }
             </style></head>
         '''
+        try:
+            page = requests.get("https://ccrl_tunnel.blindfoldchess.app/engine_list")
+        except:
+            return "<html><center>Unable to connect to server. Try again in a few minutes.</center>" + get_footer()
+        data = page.text
+        if "8CPU" not in page.text:
+            return "<html><center>Unable to connect to server (invalid response). Tunnel is most likely temporarily unavailable. Try again in a few minutes.</center>" + get_footer()
         outtext += '<body>'
         outtext += '''<center>
                     <h1>CCRL Challenger</h1>
@@ -97,18 +282,15 @@ def main_page():
                     <li> Pawns will auto-promote to queens
                     <li> Threefold draws are not detected
                     '''
-        outtext += '<br><br><a href="/ccrlchallenger">Sort by rating</a><br><br>'
+        page = requests.get("https://ccrl_tunnel.blindfoldchess.app/current_games")
+        active_users = int(page.text)
+        outtext += f'<br><br> {active_users} game(s) in progress.'
+        outtext += '- <a href="/ccrlchallenger/playing_now">View Active Games</a><BR><br>'
+        outtext += '<a href="/ccrlchallenger">Sort by rating</a><br><br>'
         outtext += '<a href="/ccrlchallenger?sort_by_date=True">Sort by release date</a>'
         outtext += '''
                     <h2>Select opponent</h2>
                     '''
-        try:
-            page = requests.get("https://ccrl_tunnel.blindfoldchess.app/engine_list")
-        except:
-            return "<html><center>Unable to connect to server. Try again in a few minutes.</center>" + get_footer()
-        data = page.text
-        if "8CPU" not in page.text:
-            return "<html><center>Unable to connect to server (invalid response). Tunnel is most likely temporarily unavailable. Try again in a few minutes.</center>" + get_footer()
         #return data
         lines = data.split("\n")
         # get random engine

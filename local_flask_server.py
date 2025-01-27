@@ -1,5 +1,7 @@
-from flask import Flask, Response, request, jsonify
+from flask import Flask, Response, request, jsonify, stream_with_context
 import subprocess
+import copy
+from queue import Queue
 import os
 import time
 import json
@@ -12,6 +14,7 @@ import re
 import chess, chess.engine, chess.polyglot
 import random
 from flask_cors import CORS
+import hashlib
 
 app = Flask(__name__)
 CORS(app)
@@ -22,6 +25,9 @@ global current_ips
 global current_clients
 global last_stream
 global recent_fens
+global last_known_fens
+
+last_known_fens = []
 
 last_connection_time = {}
 
@@ -36,6 +42,8 @@ book_file = 'c:\\python\\ccrlchallenger\\Perfect2017.bin'
 book_file = "c:\\python\\ccrlchallenger\\codekiddy.bin"
 #book_file = "c:\\python\\ccrlchallenger\\lichess-201301-202405-caissa-wins.bin"
 
+def get_user_id(ip):
+    return hashlib.md5(ip.encode()).hexdigest()[-8:]
 
 def timeout_remove_client(ip, time_limit):
     """ Helper function to remove client from global count and IP count after it times out """
@@ -200,6 +208,7 @@ global colour
 colour = {}
 @app.route("/stream_engine", methods=["GET"])
 def stream_engine():
+    global recent_fens
     global last_streamed_engine
     fen = request.args.get("fen")
     engine_name = request.args.get("engine_name")
@@ -211,11 +220,27 @@ def stream_engine():
         book_moves = int(book_moves)
     ip = request.remote_addr
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    this_id = get_user_id(ip)
     last_streamed_engine[ip] = engine_name
-    colour[ip] = fen.split(" ")[1].replace("w", "white").replace("b", "black")
+    colour[ip] = fen.split(" ")[1]
+    if colour[ip] == "w": colour[ip] = 'black'
+    elif colour[ip] == 'b': colour[ip] = 'white'
+    new_fens = []
+    print(recent_fens)
+    print(this_id)
+    for current_fen in recent_fens:
+        current_id = current_fen[1]
+        if this_id == current_id:
+            match_title = 'Human ' + this_id + ' vs ' + last_streamed_engine[ip]
+            if colour[ip] == "black":
+                match_title = last_streamed_engine[ip] + " vs Human " + this_id
+            new_fens.append((current_fen[0], current_fen[1], match_title, time.time(), colour[ip]))
+        else:
+            new_fens.append(current_fen)
+    recent_fens = list(new_fens)
     if not fen or not engine_name:
         return Response("data: {'error': 'FEN and engine_name are required'}\n\n", mimetype="text/event-stream")
-
+    if recent_fens != []: push_update()
     return Response(stream_engine_output(fen, engine_name, time_limit, ip, book_moves), mimetype="text/event-stream")
 
 
@@ -242,20 +267,42 @@ def engine_list():
         language = info[5]
         release_date = info[6]
         response += f'\'{name}\', \'{github_link}\', \'{author}\', \'{rating}\', \'{release_date}\'\n'
+    global recent_fens
+    new_fens = []
+    for fen in recent_fens:
+        age = time.time() - fen[3]
+        if age < 120:
+            new_fens.append(fen)
+        else:
+            push_delete(fen[1])
+    recent_fens = list(new_fens)
+    print(new_fens)
     return response
 
 @app.route("/engine_info", methods=["GET"])
 def engine_info():
     global logo_urls
+    global recent_fens
     engine_name = request.args.get('engine_name')
     f = open('engine_list_complete.txt', 'r', encoding='utf-8')
     lines = f.readlines()
     f.close()
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     response = ''
     for line in lines:
         info = ast.literal_eval(f"{line}")
         name = info[0]
         if name != engine_name: continue
+        new_fens = []
+        for fen in recent_fens:
+            age = time.time() - fen[3]
+            user_id = get_user_id(ip)
+            print(ip, user_id, fen[1])
+            if get_user_id(ip) == fen[1]:
+                push_delete(get_user_id(ip))
+                colour[ip] = None
+                last_streamed_engine[ip] = engine_name
+        recent_fens = list(new_fens)
         github_link = info[1]
         author = info[2]
         rating = info[3]
@@ -266,7 +313,6 @@ def engine_info():
         engine_logo = 'None'
         if short_name in logo_urls:
             engine_logo = logo_urls[short_name]
-            print(engine_logo)
         language = info[5]
         release_date = info[6]
         return f'\'{name}\', \'{github_link}\', \'{author}\', \'{rating}\', \'{exe_file}\', \'{engine_logo.strip()}\', \'{language}\', \'{release_date}\'\n'
@@ -277,44 +323,11 @@ def engine_info():
 def new_fen_and_legal_moves():
     global recent_fens
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-
+    print(ip)
     fen = request.args.get("fen")
     move = request.args.get("move")
     board = chess.Board(fen)
     # Assume recent_fens is a list of tuples (fen, ip, timestamp)
-    i = 0
-    found = False
-    new_recent_fens = []  # New list to store the valid fens
-    current_ip = ip
-    orig_fen = fen
-    for fen in recent_fens:
-        age = time.time() - fen[3]  # Calculate age of the current entry
-        if ip not in last_streamed_engine: continue
-        if ip not in colour: continue
-        match_title = 'Human Player vs ' + last_streamed_engine[ip]
-        if colour[ip] == "white":
-            match_title = last_streamed_engine[ip] + " vs Human Player"
-        if fen[1] == current_ip:  # Matching current fen and IP
-            found = True
-            new_fen = (orig_fen, fen[1], match_title, time.time())  # Update with the new timestamp
-            new_recent_fens.append(new_fen)  # Append to new list
-        else:
-            # If the fen is too old, we don't add it back
-            if age <= 120:  # Only keep the ones younger than 120 seconds
-                new_recent_fens.append(fen)
-
-        i += 1  # Increment the index for the next iteration
-    recent_fens = list(new_recent_fens)
-    if not found:
-        if ip in last_streamed_engine: engine_name = last_streamed_engine[ip]
-        if ip in last_streamed_engine and ip in colour:
-            match_title = 'Human Player vs ' + engine_name
-            if colour[ip] == "white":
-                match_title = engine_name + " vs Human Player"
-            recent_fens.append((orig_fen, ip, match_title, time.time()))
-    print("Current games:", len(recent_fens))
-    for entry in recent_fens:
-        print(":::", entry)
     game_over = 'False'
     if board.can_claim_draw():
         game_over = 'Game is drawn.'
@@ -327,6 +340,47 @@ def new_fen_and_legal_moves():
         sse_data = f"data: {json.dumps({'new_fen': fen, 'legal_moves': [], 'game_over': game_over})}\n\n"
         return Response(sse_data, mimetype="text/event-stream")
     if move != 'None': board.push_uci(move)
+    i = 0
+    found = False
+    new_recent_fens = []  # New list to store the valid fens
+    current_id = get_user_id(ip)
+    new_fen = board.fen()
+    to_delete = []
+    for fen in recent_fens:
+        age = time.time() - fen[3]  # Calculate age of the current entry
+        this_id = fen[1]
+        print(this_id, age)
+        if age > 120 and this_id != current_id:
+            to_delete.append(this_id)
+        if ip not in last_streamed_engine: continue
+        if ip not in colour: continue
+        match_title = 'Human ' + this_id + ' vs ' + last_streamed_engine[ip]
+        if colour[ip] == "black":
+            match_title = last_streamed_engine[ip] + " vs Human " + this_id
+        if fen[1] == current_id:  # Matching current fen and IP
+            found = True
+            new_fen = (new_fen, fen[1], match_title, time.time(), colour[ip])  # Update with the new timestamp
+            new_recent_fens.append(new_fen)  # Append to new list
+        else:
+            if age <= 120:
+                new_recent_fens.append(fen)
+            # If the fen is too old, we don't add it back
+        #    if age <= 15:  # Only keep the ones younger than 120 seconds
+        #        new_recent_fens.append(fen)
+
+        i += 1  # Increment the index for the next iteration
+    recent_fens = list(new_recent_fens)
+    if not found:
+        if ip in last_streamed_engine: engine_name = last_streamed_engine[ip]
+        if ip in last_streamed_engine and ip in colour:
+            match_title = 'Human ' + current_id + ' vs ' + engine_name
+            if colour[ip] == "black":
+                match_title = engine_name + " vs Human " + current_id
+            recent_fens.append((new_fen, current_id, match_title, time.time(), colour[ip]))
+    for id in to_delete:
+        print("deleting", id)
+        push_delete(id)
+    print("Current games:", len(recent_fens))
     legal_moves = board.legal_moves
     new_legal_moves = []
     new_legal_moves = []
@@ -350,13 +404,93 @@ def new_fen_and_legal_moves():
         king_pos = None
     sse_data = f"data: {json.dumps({'new_fen': new_fen, 'legal_moves': new_legal_moves, 'game_over': game_over, 'king_pos': king_pos})}\n\n"
     threading.Timer(0.01, conditional_delete_line, args=[str(request.args.get("delete_this"))]).start()
+    if recent_fens != []: push_update()
     return Response(sse_data, mimetype="text/event-stream")
 
     #    return Response(f"data: {{'new_fen': '{new_fen}', 'legal_moves': {new_legal_moves}}}")
     return
 
+
+# Global variables
+recent_fens = []  # The list of FENs to be sent to clients
+clients = []  # List of client queues
+
+
+# Function to push updates to all clients
+def push_update():
+    global clients
+    print("Sending update", len(clients))
+    data = [{'fen': info[0], 'user_id': info[1], 'match_title': info[2], 'player_colour': info[4]} for info in recent_fens]
+    message = f"data: {json.dumps(data)}\n\n"
+    # Send data to all clients
+    for client in clients:
+        client.put(message)
+
+def push_delete(user_id):
+    global clients
+    push_update()
+    return
+    print("Sending delete code", len(clients))
+    data = [{'delete_user': user_id}]
+    message = f"data: {json.dumps(data)}\n\n"
+    #print(message)
+    # Send data to all clients
+    for client in clients:
+        pass
+      #  client.put(message)
+
+# SSE function that streams data
+def playing_now_stream(client_queue):
+    try:
+        while True:
+            # Wait for new data to send
+            data = ''
+            try:
+                data = client_queue.get()  # Block until data is available
+            except:
+                pass
+            yield data.encode('utf-8')  # Send data as bytes
+    except GeneratorExit:
+        # Remove client from the list when they disconnect
+        clients.remove(client_queue)
+
+# Function to process recent FENs
+def process_recent_fens():
+    global recent_fens
+    while True:
+        new_fens = []
+        for fen in recent_fens:
+            age = time.time() - fen[3]
+            if age < 120:
+                new_fens.append(fen)
+            else:
+                push_delete(fen[1])  # Your delete logic
+        old_fens = list(recent_fens)
+        recent_fens = list(new_fens)
+        if old_fens != recent_fens: push_update()
+        time.sleep(5)  # Wait for 5 seconds before the next ru
+
+def start_background_thread():
+    thread = threading.Thread(target=process_recent_fens, daemon=True)
+    thread.start()
+
+@app.route('/playing_now_sse')
+def sse():
+    # Create a queue for the client
+    client_queue = Queue()
+    clients.append(client_queue)
+    push_update()
+    # Stream data to the client
+    return Response(playing_now_stream(client_queue), mimetype='text/event-stream')
+
+@app.route('/current_games')
+def current_games():
+    global recent_fens
+    return Response(str(len(recent_fens)))
+
 if __name__ == "__main__":
     global logo_urls
+    start_background_thread()
     logo_urls = {}
     f = open('logo_urls.txt','r',encoding='utf-8')
     lines = f.readlines()
