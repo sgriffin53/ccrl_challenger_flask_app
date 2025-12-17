@@ -29,7 +29,7 @@ def get_release_date_and_lang(url):
 
 #get_release_date_and_lang('https://www.github.com/sgriffin53/raven')
 #get_release_date_and_lang('https://github.com/Mauritz8/Vividmind')
-f = open('engine_list_complete.txt', 'r', encoding='utf-8')
+f = open('engine_list_complete_new.txt', 'r', encoding='utf-8')
 lines = f.readlines()
 f.close()
 new_lines = []
@@ -41,7 +41,7 @@ for line in lines:
     language = value[0]
     release_date = value[1]
     new_lines.append(str((info[0], info[1], info[2], info[3], info[4], language, release_date)))
-f = open('engine_list_complete_new.txt', 'w', encoding='utf-8')
+f = open('engine_list_complete_new_with_RDandLang.txt', 'w', encoding='utf-8')
 for line in new_lines:
     f.write(line + "\n")
 f.close()

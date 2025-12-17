@@ -1,7 +1,8 @@
 import requests
 import time
 def get_engines():
-    url = 'https://computerchess.org.uk/ccrl/404/index.html'
+    #url = 'https://computerchess.org.uk/ccrl/404/index.html'
+    url = 'http://computerchess.org.uk/ccrl/404/cgi/compare_engines.cgi?class=Open+source+engines&print=Rating+list&print=Results+table&print=LOS+table&table_size=12&cross_tables_for_best_versions_only=1'
     page = requests.get(url)
     text = page.text
     lines = text.split("\n")
@@ -17,6 +18,7 @@ def get_engines():
             if 'Open source' in engine_name: continue
             #print(line)
             if engine_name == 'Stock': continue
+            if engine_name == 'Sto': continue
             if engine_name in engine_names: continue
             engine_names.append(engine_name)
             if engine_url in engine_urls: continue
@@ -32,10 +34,11 @@ def get_github_links(engines):
     tried = 0
     tot_bytes = 0
     for engine in engines:
+        print(engine)
         tried += 1
         engine_name = engine[0]
         engine_url = engine[1]
-        engine_url = 'https://computerchess.org.uk/ccrl/404/' + engine_url
+        engine_url = 'https://computerchess.org.uk/ccrl/404/cgi/' + engine_url
         page = requests.get(engine_url)
         text = page.text
         lines = text.split("\n")
@@ -70,7 +73,7 @@ def get_github_links(engines):
                     #is_linux = check_for_linux(link)
                     #is_linux = True
                     #if not is_linux: continue
-                    is_windows = check_for_windows(link)
+                    is_windows = check_for_linux(link)
                     print(is_windows)
                     if len(is_windows[0]) == 0: continue
                     #is_linux = check_for_linux(link)

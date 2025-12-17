@@ -162,7 +162,10 @@ def stream_engine_output(fen, engine_name, time_limit, ip, book_moves):
         # Set up the chess engine
         with chess.engine.SimpleEngine.popen_uci(engine_path) as engine:
             # Set the engine options
-            engine.configure({"Hash": 32})  # Example engine option (adjust as needed)
+            try:
+                engine.configure({"Hash": 32})  # Example engine option (adjust as needed)
+            except:
+                pass
 
             # Make the engine ready
             #engine.is_ready()
@@ -187,12 +190,17 @@ def stream_engine_output(fen, engine_name, time_limit, ip, book_moves):
                             new_score = "Mate in " + str(score.relative.mate())
                         if hasattr(score.relative, 'cp'):
                             new_score = str(score.relative.cp)
+                            if fen.split(" ")[1] == "b":
+                                new_score = str(-float(new_score))
                     score = new_score
                     bestmove = info.get("bestmove", None)
                   #  print(bestmove)
-                    if info.get("pv", None) is not None: pv = str(info.get("pv", None)[0])
+                   # if info.get("pv", None) is not None: pv = str(info.get("pv", None)[0])
+                    pv_value = info.get("pv", None)
+                    if pv_value and isinstance(pv_value, (list, tuple)) and len(pv_value) > 0:
+                        pv = str(pv_value[0])
                     yield f"data: {json.dumps({'current_best': pv, 'nodes': nodes, 'depth': depth, 'nps': nps, 'score': score, 'current_clients': current_clients})}\n\n"
-                  #  if bestmove:
+#  if bestmove:
                   #      yield f"data: {json.dumps({'best_move': str(bestmove), 'current_clients': current_clients})}\n\n"
             best_move = pv
             # Stream engine output and update server load
@@ -201,6 +209,29 @@ def stream_engine_output(fen, engine_name, time_limit, ip, book_moves):
 
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e), 'current_clients': current_clients})}\n\n"
+
+def moves_to_pgn(move_list):
+    pgn = []
+    for i, move in enumerate(move_list):
+        move_number = (i // 2) + 1
+        if i % 2 == 0:  # White's move
+            if i > 0:
+                pgn.append(f"{move_number}. {move}")
+            else:
+                pgn.append(f"{move_number}. {move}")
+        else:  # Black's move
+            pgn[-1] += f" {move}"
+    return " ".join(pgn)
+
+def check_for_threefold(game_history):
+    board = chess.Board()
+    for move in game_history:
+        try:
+            board.push_uci(move)
+        except:
+            return False
+    if board.can_claim_threefold_repetition(): return True
+    return False
 
 global last_streamed_engine
 last_streamed_engine = {}
@@ -225,9 +256,8 @@ def stream_engine():
     colour[ip] = fen.split(" ")[1]
     if colour[ip] == "w": colour[ip] = 'black'
     elif colour[ip] == 'b': colour[ip] = 'white'
+    print("old fens", recent_fens)
     new_fens = []
-    print(recent_fens)
-    print(this_id)
     for current_fen in recent_fens:
         current_id = current_fen[1]
         if this_id == current_id:
@@ -238,6 +268,7 @@ def stream_engine():
         else:
             new_fens.append(current_fen)
     recent_fens = list(new_fens)
+    print("new fens", recent_fens)
     if not fen or not engine_name:
         return Response("data: {'error': 'FEN and engine_name are required'}\n\n", mimetype="text/event-stream")
     if recent_fens != []: push_update()
@@ -263,8 +294,10 @@ def engine_list():
         github_link = info[1]
         author = info[2]
         rating = info[3]
+        rank = info[5]
+        rating = "#" + rank + " (" + rating + ")"
         exe_file = info[4]
-        language = info[5]
+        language = info[7]
         release_date = info[6]
         response += f'\'{name}\', \'{github_link}\', \'{author}\', \'{rating}\', \'{release_date}\'\n'
     global recent_fens
@@ -276,7 +309,6 @@ def engine_list():
         else:
             push_delete(fen[1])
     recent_fens = list(new_fens)
-    print(new_fens)
     return response
 
 @app.route("/engine_info", methods=["GET"])
@@ -288,6 +320,8 @@ def engine_info():
     lines = f.readlines()
     f.close()
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    game_history[ip] = []
+    game_history_san[ip] = []
     response = ''
     for line in lines:
         info = ast.literal_eval(f"{line}")
@@ -297,15 +331,18 @@ def engine_info():
         for fen in recent_fens:
             age = time.time() - fen[3]
             user_id = get_user_id(ip)
-            print(ip, user_id, fen[1])
             if get_user_id(ip) == fen[1]:
-                push_delete(get_user_id(ip))
+                #push_delete(get_user_id(ip))
                 colour[ip] = None
                 last_streamed_engine[ip] = engine_name
+            else:
+                new_fens.append(fen)
         recent_fens = list(new_fens)
         github_link = info[1]
         author = info[2]
         rating = info[3]
+        rank = info[5]
+        rating = "#" + rank + " (" + rating + ")"
         exe_file = info[4]
         exe_file = exe_file.replace("\\","/" )
         match = re.match(r'^([A-Za-z]+)', name)
@@ -319,16 +356,35 @@ def engine_info():
     return 'None'
     pass
 
+
+@app.route("/get_pgn", methods=["GET"])
+def get_pgn():
+    global game_history
+    global game_history_san
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if ip not in game_history_san:
+        return '', 404  # Return a 404 if no PGN found for the given IP
+
+    # Build the PGN response
+    pgn_data = moves_to_pgn(game_history_san[ip])
+
+    # Return the response as JSON (not event-stream)
+    return jsonify({"PGN": pgn_data})
+
 @app.route("/new_fen_and_legal_moves", methods=["GET"])
 def new_fen_and_legal_moves():
     global recent_fens
+    global game_history
+    global game_history_san
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    print(ip)
     fen = request.args.get("fen")
     move = request.args.get("move")
     board = chess.Board(fen)
     # Assume recent_fens is a list of tuples (fen, ip, timestamp)
     game_over = 'False'
+    if ip in game_history and move != 'None':
+        if check_for_threefold(game_history[ip]):
+            game_over = 'Game is drawn by threefold repetition.'
     if board.can_claim_draw():
         game_over = 'Game is drawn.'
     if board.is_checkmate():
@@ -339,25 +395,37 @@ def new_fen_and_legal_moves():
     if game_over != 'False':
         sse_data = f"data: {json.dumps({'new_fen': fen, 'legal_moves': [], 'game_over': game_over})}\n\n"
         return Response(sse_data, mimetype="text/event-stream")
-    if move != 'None': board.push_uci(move)
+    if move == 'None' or fen == 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1':
+        game_history[ip] = []
+        game_history_san[ip] = []
+
+    if move != 'None':
+        if ip not in game_history:
+            game_history[ip] = []
+        if ip not in game_history_san:
+            game_history_san[ip] = []
+        game_history[ip].append(str(move))
+        game_history_san[ip].append(board.san(chess.Move.from_uci(move)))
+        print("------------", moves_to_pgn(game_history_san[ip]))
+        board.push_uci(move)
     i = 0
     found = False
     new_recent_fens = []  # New list to store the valid fens
     current_id = get_user_id(ip)
     new_fen = board.fen()
     to_delete = []
+    print("before fens:", recent_fens)
     for fen in recent_fens:
         age = time.time() - fen[3]  # Calculate age of the current entry
         this_id = fen[1]
-        print(this_id, age)
         if age > 120 and this_id != current_id:
             to_delete.append(this_id)
-        if ip not in last_streamed_engine: continue
-        if ip not in colour: continue
-        match_title = 'Human ' + this_id + ' vs ' + last_streamed_engine[ip]
-        if colour[ip] == "black":
-            match_title = last_streamed_engine[ip] + " vs Human " + this_id
         if fen[1] == current_id:  # Matching current fen and IP
+            if ip not in last_streamed_engine: continue
+            if ip not in colour: continue
+            match_title = 'Human ' + this_id + ' vs ' + last_streamed_engine[ip]
+            if colour[ip] == "black":
+                match_title = last_streamed_engine[ip] + " vs Human " + this_id
             found = True
             new_fen = (new_fen, fen[1], match_title, time.time(), colour[ip])  # Update with the new timestamp
             new_recent_fens.append(new_fen)  # Append to new list
@@ -370,6 +438,7 @@ def new_fen_and_legal_moves():
 
         i += 1  # Increment the index for the next iteration
     recent_fens = list(new_recent_fens)
+    print("after fens", recent_fens)
     if not found:
         if ip in last_streamed_engine: engine_name = last_streamed_engine[ip]
         if ip in last_streamed_engine and ip in colour:
@@ -378,7 +447,6 @@ def new_fen_and_legal_moves():
                 match_title = engine_name + " vs Human " + current_id
             recent_fens.append((new_fen, current_id, match_title, time.time(), colour[ip]))
     for id in to_delete:
-        print("deleting", id)
         push_delete(id)
     print("Current games:", len(recent_fens))
     legal_moves = board.legal_moves
@@ -389,6 +457,9 @@ def new_fen_and_legal_moves():
     new_fen = board.fen()
     game_over = 'False'
     king_pos = str(chess.square_name(board.king(board.turn)))
+    if ip in game_history:
+        if check_for_threefold(game_history[ip]):
+            game_over = 'Game is drawn by threefold repetition.'
     if board.can_claim_draw():
         game_over = 'Game is drawn (claimable draw).'
     elif board.is_stalemate():
@@ -404,6 +475,8 @@ def new_fen_and_legal_moves():
         king_pos = None
     sse_data = f"data: {json.dumps({'new_fen': new_fen, 'legal_moves': new_legal_moves, 'game_over': game_over, 'king_pos': king_pos})}\n\n"
     threading.Timer(0.01, conditional_delete_line, args=[str(request.args.get("delete_this"))]).start()
+    print("sending from recent fens")
+    print(recent_fens)
     if recent_fens != []: push_update()
     return Response(sse_data, mimetype="text/event-stream")
 
@@ -414,7 +487,8 @@ def new_fen_and_legal_moves():
 # Global variables
 recent_fens = []  # The list of FENs to be sent to clients
 clients = []  # List of client queues
-
+game_history = {}
+game_history_san = {}
 
 # Function to push updates to all clients
 def push_update():
@@ -428,7 +502,7 @@ def push_update():
 
 def push_delete(user_id):
     global clients
-    push_update()
+    #push_update()
     return
     print("Sending delete code", len(clients))
     data = [{'delete_user': user_id}]
@@ -468,7 +542,7 @@ def process_recent_fens():
         old_fens = list(recent_fens)
         recent_fens = list(new_fens)
         if old_fens != recent_fens: push_update()
-        time.sleep(5)  # Wait for 5 seconds before the next ru
+        time.sleep(5)  # Wait for 5 seconds before the next run
 
 def start_background_thread():
     thread = threading.Thread(target=process_recent_fens, daemon=True)
